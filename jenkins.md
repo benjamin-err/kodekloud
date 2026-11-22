@@ -764,6 +764,59 @@ pipeline {
 }
 ```
 
+### Docker containers as agents
+
+Instead of a permanent machine, a pipeline can run inside a **throwaway Docker container**:
+
+```groovy
+pipeline {
+    agent {
+        docker { image 'golang:latest' }   // run all stages inside this image
+    }
+    stages {
+        stage('Development') {
+            steps {
+                git 'https://github.com/AdminTurnedDevOps/go-webapp-sample.git'
+                sh 'go version'
+            }
+        }
+    }
+}
+```
+
+What Jenkins does:
+
+1. Picks a node that has Docker (here the controller, or any agent).
+2. Pulls `golang:latest` if it isn't there yet.
+3. Starts a container from it and mounts the job's workspace into it.
+4. Runs every step **inside the container**. `go version` works although Go isn't installed on the node, because the image has it.
+5. Stops and removes the container when the build ends. The workspace (cloned code) stays on the node.
+
+| | SSH agent (`label`) | Docker agent (`docker`) |
+|---|---|---|
+| Machine | Permanent, set up once | New container per build |
+| Tools | Installed on the machine by hand | Come with the image |
+| Clean state | Leftovers from earlier builds | Fresh every time |
+| Needs | Java + SSH on the machine | Docker on the node, **Docker Pipeline** plugin |
+
+**Requirements:**
+- The **Docker Pipeline** plugin (*Manage Jenkins → Plugins*). Without it the pipeline fails with `Invalid agent type "docker"`.
+- Docker installed on the node that runs the build, and the `jenkins` user in the `docker` group (same as step 13).
+
+Useful options:
+
+```groovy
+agent {
+    docker {
+        image 'golang:1.22'          // pin a version instead of latest
+        label 'linux-node'           // which node should start the container
+        args  '-v /tmp/go:/go'       // extra docker run options, e.g. a cache volume
+    }
+}
+```
+
+Like `label`, `docker` also works per stage, for example with `agent none` at the top, so one stage builds in `golang` and another tests in a different image.
+
 > **Good practice:** Set the controller's executors to `0` (*Nodes → Built-In Node → Configure*) so builds only run on agents. Use SSH keys instead of passwords, a dedicated agent folder like `/home/bob/jenkins-agent`, and verify the host key on first connect.
 
 ---
@@ -789,6 +842,7 @@ pipeline {
 | `permission denied … /var/run/docker.sock` | The `jenkins` user can't use Docker | `sudo usermod -aG docker jenkins`, then restart Jenkins (step 13). |
 | Agent stays offline, log says `java: command not found` | Java isn't installed on the agent | `sudo yum install java-17 -y` on the agent, then *Relaunch agent* (step 14). |
 | Agent log shows an SSH authentication failure | Wrong username/password in the credentials | Test `ssh bob@node01` by hand, then fix the credentials (step 14). |
+| `Invalid agent type "docker" specified` | Docker Pipeline plugin not installed | Install **Docker Pipeline** and run the build again (step 14). |
 | Build waits forever: *Waiting for next available executor* | No online node has the requested label, or all executors are busy | Check the label in `agent { label … }` matches the node name and the node is online (step 14). |
 
 ---
