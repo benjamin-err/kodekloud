@@ -18,8 +18,9 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 12. [Views](#11-views)
 13. [Metrics with Prometheus and Grafana](#12-metrics-with-prometheus-and-grafana)
 14. [Pipelines](#13-pipelines)
-15. [Troubleshooting](#troubleshooting)
-16. [Quick reference](#quick-reference)
+15. [Agents](#14-agents)
+16. [Troubleshooting](#troubleshooting)
+17. [Quick reference](#quick-reference)
 
 ---
 
@@ -37,7 +38,7 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 
 > **Note:** The course labs use Red Hat-style servers (`yum`, `rpm`). Ubuntu uses `apt` instead, so the lab commands were translated. Both versions are shown where they differ.
 >
-> Steps 1–8 were done on my local machine. Steps 9–13 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
+> Steps 1–8 were done on my local machine. Steps 9–14 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
 
 ---
 
@@ -634,6 +635,139 @@ docker push adminturneddevops/go-webapp-sample:latest   # upload (needs docker l
 
 ---
 
+## 14. Agents
+
+So far every build ran on the Jenkins server itself. With **agents**, the server only coordinates, and other machines do the actual work.
+
+| Term | Meaning |
+|---|---|
+| **Controller** | The Jenkins server: UI, configuration, scheduling. Hands builds to agents. |
+| **Agent** | A machine (server, VM, container) that runs builds for the controller. |
+| **Node** | Any machine registered in Jenkins, including the controller. Has a name and labels. |
+| **Executor** | A build slot on a node. 1 executor = 1 build at a time. |
+| **Label** | A tag on a node, used by pipelines to choose where they run. |
+
+In the lab, the remote machine is a CentOS host called `node01` with a Linux user `bob`. In Jenkins it's registered as the node `linux-node`:
+
+![Jenkins controller connects over SSH to node01 (CentOS, user bob), registered as node linux-node with 1 executor, which runs the Hello stage](images/jenkins-agent-architecture.png)
+
+**Why bother?** The controller stays light and safe, builds can run in parallel on several machines, and each project gets a machine with the right tools (Go, Docker, Windows, …).
+
+### 1. Install the SSH Build Agents plugin
+
+*Manage Jenkins → Plugins → Available plugins →* **SSH Build Agents**. It lets the controller log in to a machine over SSH and start the agent process there. Nothing has to be installed on the agent except Java.
+
+### 2. Prepare the agent machine
+
+```bash
+ssh bob@node01             # log in to the future agent
+sudo yum install java-17 -y   # CentOS; on Ubuntu: sudo apt install openjdk-17-jre
+java -version              # check
+```
+
+The agent process is a Java program (`remoting.jar`) that Jenkins copies over and starts, so **Java is the only hard requirement**. Its version must be one your controller supports; Java 17 worked in the lab. The machine also needs a running SSH server reachable from the controller.
+
+Java alone doesn't install build tools. If a pipeline runs `go` or `docker` on this agent, those must be installed on `node01` too.
+
+### 3. Add credentials for bob
+
+*Manage Jenkins → Credentials → System → Global credentials → Add Credentials*
+
+| Field | Value |
+|---|---|
+| Kind | Username with password |
+| Scope | Global |
+| Username | `bob` |
+| Password | bob's Linux password |
+| ID | e.g. `node01-ssh` (optional, makes it easier to find) |
+
+Jenkins stores the password encrypted and uses it to SSH into `node01`. In real setups, prefer **SSH Username with private key**, the same idea as step 4.
+
+### 4. Create the node
+
+*Manage Jenkins → Nodes → New Node →* name `linux-node`, type **Permanent Agent**.
+
+| Setting | Value | Why |
+|---|---|---|
+| Number of executors | `1` | One build at a time on this machine |
+| Remote root directory | `/home/bob` | Where Jenkins puts the agent files and workspaces; bob must be able to write here |
+| Labels | *(empty)* | The node name works as a label anyway |
+| Usage | Only build jobs with label expressions matching this node | Only jobs that ask for this node run here |
+| Launch method | Launch agents via SSH | Uses the plugin from step 1 |
+| Host | `node01` | Hostname the **controller** connects to |
+| Credentials | `bob/******` | From step 3 |
+| Host Key Verification Strategy | Manually trusted key | Checks node01's SSH host key |
+| Availability | Keep this agent online as much as possible | Reconnects automatically |
+
+After **Save**, Jenkins connects to `node01` as `bob`, copies the agent, and starts it with Java. Check *Nodes → linux-node → Log*; the end should say the agent is connected and online.
+
+### 5. Run a pipeline on the agent
+
+```groovy
+pipeline {
+    agent {
+        label "linux-node"   // run on a node matching this label
+    }
+    stages {
+        stage('Hello') {
+            steps {
+                echo 'Hello World'
+            }
+        }
+    }
+}
+```
+
+`agent { label "linux-node" }` means: *find a free executor on a node with this label and run the pipeline there.* The console shows where it ran:
+
+```
+Running on linux-node in /home/bob/workspace/<job-name>
+...
+Hello World
+Finished: SUCCESS
+```
+
+Two names, two jobs:
+
+| Name | What it is | Used by |
+|---|---|---|
+| `node01` | The machine's real hostname | SSH (the node's **Host** field) |
+| `linux-node` | The node's name inside Jenkins | Pipelines (`label`) |
+
+`echo` is a Jenkins step that only prints to the log. To prove the build really runs on `node01`, use shell commands:
+
+```groovy
+steps {
+    sh 'hostname'   // node01
+    sh 'whoami'     // bob
+    sh 'pwd'        // /home/bob/workspace/<job-name>
+}
+```
+
+### Different stages on different agents
+
+With `agent none` at the top, each stage picks its own agent:
+
+```groovy
+pipeline {
+    agent none
+    stages {
+        stage('Build Go') {
+            agent { label 'linux-node' }
+            steps { sh 'go version' }
+        }
+        stage('Build Docker') {
+            agent { label 'docker-node' }
+            steps { sh 'docker version' }
+        }
+    }
+}
+```
+
+> **Good practice:** Set the controller's executors to `0` (*Nodes → Built-In Node → Configure*) so builds only run on agents. Use SSH keys instead of passwords, a dedicated agent folder like `/home/bob/jenkins-agent`, and verify the host key on first connect.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -653,6 +787,9 @@ docker push adminturneddevops/go-webapp-sample:latest   # upload (needs docker l
 | `go-webapp-sample: not found` | The program isn't in `$PATH` | Run it with `./go-webapp-sample` from its folder (step 13). |
 | `go: not found` | Go isn't installed on the Jenkins machine | Install Go on the agent (step 13). |
 | `permission denied … /var/run/docker.sock` | The `jenkins` user can't use Docker | `sudo usermod -aG docker jenkins`, then restart Jenkins (step 13). |
+| Agent stays offline, log says `java: command not found` | Java isn't installed on the agent | `sudo yum install java-17 -y` on the agent, then *Relaunch agent* (step 14). |
+| Agent log shows an SSH authentication failure | Wrong username/password in the credentials | Test `ssh bob@node01` by hand, then fix the credentials (step 14). |
+| Build waits forever: *Waiting for next available executor* | No online node has the requested label, or all executors are busy | Check the label in `agent { label … }` matches the node name and the node is online (step 14). |
 
 ---
 
@@ -694,4 +831,8 @@ sudo usermod -aG docker jenkins && sudo systemctl restart jenkins
 docker images
 docker run -d -p 8080:8080 adminturneddevops/go-webapp-sample:latest
 docker push adminturneddevops/go-webapp-sample:latest
+
+# Agent machine: log in, install Java
+ssh bob@node01
+sudo yum install java-17 -y && java -version
 ```
