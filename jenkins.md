@@ -1,6 +1,6 @@
 # Jenkins Setup Notes
 
-Personal notes from the KodeKloud Jenkins course: how I installed Jenkins locally, and why each step was done. These notes grow as the course goes on.
+Personal notes from the KodeKloud Jenkins course: installing and accessing Jenkins, then plugins, permissions, views and monitoring, with the reason for each step. These notes grow as the course goes on.
 
 ## Contents
 
@@ -13,8 +13,12 @@ Personal notes from the KodeKloud Jenkins course: how I installed Jenkins locall
 7. [Add the public key to the Jenkins user](#6-add-the-public-key-to-the-jenkins-user)
 8. [Connect to Jenkins over SSH](#7-connect-to-jenkins-over-ssh)
 9. [Use the Jenkins CLI](#8-use-the-jenkins-cli)
-10. [Troubleshooting](#troubleshooting)
-11. [Quick reference](#quick-reference)
+10. [Plugins](#9-plugins)
+11. [Permissions](#10-permissions)
+12. [Views](#11-views)
+13. [Metrics with Prometheus and Grafana](#12-metrics-with-prometheus-and-grafana)
+14. [Troubleshooting](#troubleshooting)
+15. [Quick reference](#quick-reference)
 
 ---
 
@@ -31,6 +35,8 @@ Personal notes from the KodeKloud Jenkins course: how I installed Jenkins locall
 | Working folder | `~/kodekloud` (SSH keys and `jenkins-cli.jar`) |
 
 > **Note:** The course labs use Red Hat-style servers (`yum`, `rpm`). Ubuntu uses `apt` instead, so the lab commands were translated. Both versions are shown where they differ.
+>
+> Steps 1–8 were done on my local machine. Steps 9–12 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
 
 ---
 
@@ -252,6 +258,182 @@ Create the token under *your user → Security → API Token → Add new token*.
 
 ---
 
+## 9. Plugins
+
+Jenkins on its own is a small core. Almost everything else (Git, pipelines, SSH, security strategies, metrics) comes from plugins.
+
+**Manage plugins:** *Manage Jenkins → Plugins*
+
+| Tab | Used for |
+|---|---|
+| **Updates** | Newer versions of plugins you already have. |
+| **Available plugins** | Search for and install new plugins. |
+| **Installed plugins** | Enable, disable or uninstall plugins. |
+| **Advanced settings** | Upload a `.hpi` file by hand, or change the update site. |
+
+After installing, tick **Restart Jenkins when installation is complete and no jobs are running**. Many plugins only load after a restart. To restart by hand, open `http://<jenkins>/safeRestart`, which waits for running builds to finish first.
+
+**Install from the CLI** (handy for scripting):
+
+```bash
+java -jar jenkins-cli.jar -s http://localhost:8080 -auth benjamin:<API_TOKEN> \
+  install-plugin role-strategy prometheus -restart
+```
+
+Installed plugins live in `/var/lib/jenkins/plugins/`, one `.jpi` file and folder per plugin.
+
+**Plugins used in these notes**
+
+| Plugin | ID | Used for |
+|---|---|---|
+| SSH server | `sshd` | SSH and CLI login with a key (step 5) |
+| Matrix Authorization Strategy | `matrix-auth` | Matrix-based permissions (step 10) |
+| Role-based Authorization Strategy | `role-strategy` | Role-based permissions (step 10) |
+| Prometheus metrics | `prometheus` | Exposes Jenkins metrics for Prometheus (step 12) |
+
+---
+
+## 10. Permissions
+
+By default, every logged-in user can do everything. Permissions decide **who** can do **what**: see jobs, start builds, change configuration, or administer Jenkins.
+
+**Where:** *Manage Jenkins → Security → Authorization*
+
+| Strategy | What it does |
+|---|---|
+| Anyone can do anything | No security at all. Only for throwaway test setups. |
+| Logged-in users can do anything | The default. Anyone with an account is effectively an admin. |
+| Matrix-based security | A table of users/groups × permissions for the whole Jenkins. |
+| Project-based Matrix Authorization | Same table, plus extra permissions set per job. |
+| Role-Based Strategy | Define roles once, then assign users to roles. Scales better. |
+
+**Create test users first:** *Manage Jenkins → Users → Create User*. Then log in as them (in a private browser window) to check that permissions behave as expected.
+
+> ⚠️ **Don't lock yourself out.** Before saving a new strategy, make sure your own admin user has **Overall → Administer**. If you do get locked out, set `<useSecurity>false</useSecurity>` in `/var/lib/jenkins/config.xml`, run `sudo systemctl restart jenkins`, fix the permissions, and turn security back on.
+
+### Matrix-based security
+
+Plugin: **Matrix Authorization Strategy**.
+
+1. Choose **Matrix-based security**.
+2. Click **Add user** and enter the username.
+3. Tick the permissions for that user, then **Save**.
+
+Common permissions:
+
+| Permission | Allows |
+|---|---|
+| Overall → Administer | Everything. Only for admins. |
+| Overall → Read | Seeing Jenkins at all. Every user needs this. |
+| Job → Read | Seeing jobs. |
+| Job → Build | Starting builds. |
+| Job → Configure | Changing a job's settings. |
+| Job → Create / Delete | Creating or deleting jobs. |
+
+With **Project-based Matrix Authorization**, open a job → *Configure* → **Enable project-based security** to give users extra permissions on that job only. These add to the global permissions; they can't take any away.
+
+### Role-based strategy
+
+Plugin: **Role-based Authorization Strategy**.
+
+1. Choose **Role-Based Strategy** and **Save**.
+2. Go to *Manage Jenkins → Manage and Assign Roles → Manage Roles* and create roles:
+   - **Global roles** apply to all of Jenkins, for example `admin` (Administer) or `viewer` (Overall → Read).
+   - **Item roles** apply to jobs whose name matches a **pattern** (a regular expression). For example, role `developer` with pattern `dev-.*` and the Job → Build and Read permissions applies to every job starting with `dev-`.
+3. Go to *Assign Roles*, add the users, and tick their roles.
+
+> A user needs a **global** role with **Overall → Read**, otherwise they can't see Jenkins even if an item role would give them jobs.
+
+**Matrix or roles?** Matrix is quick for a handful of users. Roles are easier to maintain with many users or jobs, because you change a role once instead of every user's row.
+
+---
+
+## 11. Views
+
+Views are tabs on the Jenkins dashboard that group jobs, so a long job list stays manageable. The default view **All** shows every job.
+
+**Create a view:** click **+** next to the view tabs (or *New View*), enter a name, and pick a type:
+
+| Type | Shows |
+|---|---|
+| **List View** | The jobs you pick, or all jobs matching a regular expression. |
+| **My View** | All jobs the current user has access to. |
+
+For a List View, choose the jobs under **Job Filters**, either by ticking them or with **Use a regular expression to include jobs into the view** (for example `dev-.*`). Under **Columns** you choose what's shown per job (status, weather, last success, and so on).
+
+To change or remove a view, open it and use **Edit View** or **Delete View**. Deleting a view never deletes its jobs.
+
+---
+
+## 12. Metrics with Prometheus and Grafana
+
+The three tools each do one job:
+
+```
+Jenkins (Prometheus plugin) ──► Prometheus ──► Grafana
+   exposes metrics at          collects and      shows them
+   /prometheus/                stores them       on dashboards
+```
+
+### Jenkins: expose metrics
+
+1. Install the **Prometheus metrics** plugin (step 9) and restart Jenkins.
+2. Jenkins now serves its metrics at `http://<jenkins>/prometheus/`. Open it in a browser to check: you should see plain-text lines such as `jenkins_executor_count_value`.
+
+The path and how often metrics are collected can be changed under *Manage Jenkins → System → Prometheus*.
+
+### Prometheus: collect the metrics
+
+Prometheus **scrapes** (fetches) metrics from each target at a fixed interval and stores them. Which targets to scrape is set in `/etc/prometheus/prometheus.yml`:
+
+```yaml
+global:
+  scrape_interval: 15s          # default: scrape every 15 seconds
+
+scrape_configs:
+  - job_name: 'Prometheus'      # Prometheus monitors itself
+    scrape_interval: 5s         # overrides the default for this job
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'Jenkins'
+    metrics_path: /prometheus/  # Jenkins plugin path; the default would be /metrics
+    static_configs:
+      - targets: ['localhost:8085']   # Jenkins host:port in the lab
+```
+
+| Key | Meaning |
+|---|---|
+| `scrape_interval` | How often to fetch metrics. Set globally, can be overridden per job. |
+| `job_name` | A label for the target group. It shows up in queries as `job="Jenkins"`. |
+| `metrics_path` | URL path of the metrics page. Needed for Jenkins because it isn't `/metrics`. |
+| `targets` | `host:port` to scrape. Only the address, without `http://` or the path. |
+
+YAML is indentation-sensitive: each `- job_name` must start at the same column, and nested keys use spaces, never tabs. Check the file, then restart Prometheus to load it:
+
+```bash
+promtool check config /etc/prometheus/prometheus.yml
+sudo systemctl restart prometheus
+```
+
+**Verify:** open `http://localhost:9090/targets` (*Status → Targets*). Both jobs should show **UP**. In the query box, `up{job="Jenkins"}` should return `1`.
+
+### Grafana: visualise the metrics
+
+Grafana reads from Prometheus and draws dashboards. It runs on port `3000`; the first login is `admin` / `admin`, and you're asked to set a new password.
+
+**1. Add Prometheus as a data source:** *Connections → Data sources → Add new data source → Prometheus*. Set **Prometheus server URL** to `http://localhost:9090`, then click **Save & test** at the bottom of the page.
+
+![Grafana Prometheus data source with server URL http://localhost:9090](images/grafana-prometheus-datasource.png)
+
+`localhost` works here because Grafana and Prometheus run on the same machine. Otherwise, use the Prometheus server's hostname or IP.
+
+**2. Build or import a dashboard:**
+- **Import:** *Dashboards → New → Import*, enter a dashboard ID from [grafana.com/grafana/dashboards](https://grafana.com/grafana/dashboards/) (search for "Jenkins"), and select the Prometheus data source.
+- **Build:** *Dashboards → New → New dashboard → Add visualization*, pick the data source and enter a query, for example `jenkins_executor_count_value` or `jenkins_job_count_value`.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -262,6 +444,10 @@ Create the token under *your user → Security → API Token → Add new token*.
 | `curl … \| grep x-ssh-endpoint` prints nothing | SSH port is set to **Disabled** | *Manage Jenkins → Security → SSH Server → Fixed* (step 5). |
 | `Could not resolve hostname jenkins-server` | Lab-only hostname | Use `localhost` or add an `/etc/hosts` alias (step 7). |
 | `Permission denied (publickey)` | Public key not saved on the Jenkins user, or wrong username | Paste the `.pub` key into the user's Security page and check the username (step 6). |
+| Locked out after changing the authorization strategy | Your user has no **Overall → Administer** | Set `<useSecurity>false</useSecurity>` in `/var/lib/jenkins/config.xml` and restart Jenkins (step 10). |
+| User can log in but sees nothing | No **Overall → Read** permission / no global role | Give them Overall → Read, or a global role that has it (step 10). |
+| Prometheus doesn't start after editing the config | YAML error, often wrong indentation or a missing `]` | Run `promtool check config /etc/prometheus/prometheus.yml` (step 12). |
+| Jenkins target is **DOWN** in Prometheus | Wrong port, missing `metrics_path`, or the plugin isn't installed | Open `http://<jenkins>/prometheus/` in a browser and match the config to it (step 12). |
 
 ---
 
@@ -284,4 +470,15 @@ ssh -i ~/kodekloud/jenkins_ed25519 -l benjamin -p 8088 localhost who-am-i
 # CLI over SSH
 java -jar ~/kodekloud/jenkins-cli.jar -s http://localhost:8080 \
   -ssh -user benjamin -i ~/kodekloud/jenkins_ed25519 help
+
+# Safe restart (waits for running builds)
+#   http://<jenkins>/safeRestart
+
+# Prometheus: check config, reload, see targets
+promtool check config /etc/prometheus/prometheus.yml
+sudo systemctl restart prometheus
+#   http://localhost:9090/targets
+
+# Jenkins metrics endpoint
+curl -s http://localhost:8085/prometheus/ | head
 ```
