@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 210" width="820" height="210" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <title>CI/CD flow: GitHub, Jenkins checkout, Docker build, then optional push and deploy</title>
+  <rect width="820" height="210" fill="#ffffff"/>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#57606a"/></marker>
+  </defs>
+
+  <!-- bracket: this pipeline -->
+  <path d="M20 40 V30 H482 V40" fill="none" stroke="#0969da" stroke-width="2"/>
+  <text x="251" y="22" text-anchor="middle" font-size="13" font-weight="600" fill="#0969da">What our pipeline does</text>
+
+  <!-- boxes -->
+  <g font-size="14">
+    <rect x="20" y="60" width="140" height="90" rx="8" fill="#f6f8fa" stroke="#57606a" stroke-width="1.5"/>
+    <text x="90" y="95" text-anchor="middle" font-weight="600" fill="#1f2328">GitHub repo</text>
+    <text x="90" y="117" text-anchor="middle" font-size="12" fill="#57606a">source code</text>
+    <text x="90" y="133" text-anchor="middle" font-size="12" fill="#57606a">+ Dockerfile</text>
+
+    <rect x="181" y="60" width="140" height="90" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+    <text x="251" y="95" text-anchor="middle" font-weight="600" fill="#1f2328">Checkout</text>
+    <text x="251" y="117" text-anchor="middle" font-size="12" fill="#57606a">git step clones</text>
+    <text x="251" y="133" text-anchor="middle" font-size="12" fill="#57606a">into workspace</text>
+
+    <rect x="342" y="60" width="140" height="90" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+    <text x="412" y="95" text-anchor="middle" font-weight="600" fill="#1f2328">Docker build</text>
+    <text x="412" y="117" text-anchor="middle" font-size="12" fill="#57606a">creates the</text>
+    <text x="412" y="133" text-anchor="middle" font-size="12" fill="#57606a">image</text>
+
+    <rect x="503" y="60" width="140" height="90" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="573" y="95" text-anchor="middle" font-weight="600" fill="#57606a">Docker push</text>
+    <text x="573" y="117" text-anchor="middle" font-size="12" fill="#8c959f">upload image</text>
+    <text x="573" y="133" text-anchor="middle" font-size="12" fill="#8c959f">to a registry</text>
+
+    <rect x="664" y="60" width="140" height="90" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="734" y="95" text-anchor="middle" font-weight="600" fill="#57606a">Deploy</text>
+    <text x="734" y="117" text-anchor="middle" font-size="12" fill="#8c959f">docker run on</text>
+    <text x="734" y="133" text-anchor="middle" font-size="12" fill="#8c959f">a server</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#57606a" stroke-width="1.5" marker-end="url(#a)">
+    <line x1="160" y1="105" x2="179" y2="105"/>
+    <line x1="321" y1="105" x2="340" y2="105"/>
+    <line x1="482" y1="105" x2="501" y2="105" stroke-dasharray="4 3"/>
+    <line x1="643" y1="105" x2="662" y2="105" stroke-dasharray="4 3"/>
+  </g>
+
+  <text x="653" y="180" text-anchor="middle" font-size="12" fill="#8c959f">Dashed: next steps, not part of this pipeline yet</text>
+</svg>

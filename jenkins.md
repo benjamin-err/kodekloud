@@ -1,6 +1,6 @@
 # Jenkins Setup Notes
 
-Personal notes from the KodeKloud Jenkins course: installing and accessing Jenkins, then plugins, permissions, views and monitoring, with the reason for each step. These notes grow as the course goes on.
+Personal notes from the KodeKloud Jenkins course: installing and accessing Jenkins, then plugins, permissions, views, monitoring and pipelines, with the reason for each step. These notes grow as the course goes on.
 
 ## Contents
 
@@ -17,8 +17,9 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 11. [Permissions](#10-permissions)
 12. [Views](#11-views)
 13. [Metrics with Prometheus and Grafana](#12-metrics-with-prometheus-and-grafana)
-14. [Troubleshooting](#troubleshooting)
-15. [Quick reference](#quick-reference)
+14. [Pipelines](#13-pipelines)
+15. [Troubleshooting](#troubleshooting)
+16. [Quick reference](#quick-reference)
 
 ---
 
@@ -36,7 +37,7 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 
 > **Note:** The course labs use Red Hat-style servers (`yum`, `rpm`). Ubuntu uses `apt` instead, so the lab commands were translated. Both versions are shown where they differ.
 >
-> Steps 1–8 were done on my local machine. Steps 9–12 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
+> Steps 1–8 were done on my local machine. Steps 9–13 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
 
 ---
 
@@ -434,6 +435,205 @@ Grafana reads from Prometheus and draws dashboards. It runs on port `3000`; the 
 
 ---
 
+## 13. Pipelines
+
+A **pipeline** describes a whole build process (get the code, test it, build it, ship it) as code, instead of clicking it together in the UI. Because it's code, it can be versioned in Git as a `Jenkinsfile`.
+
+The goal in this lesson: check out a Go web app from GitHub, test it, and build a Docker image from it.
+
+![CI/CD flow: GitHub repo, checkout, Docker build; Docker push and deploy are next steps](images/pipeline-flow.svg)
+
+### Prerequisites
+
+| What | Why |
+|---|---|
+| **Pipeline** plugin | Adds the *Pipeline* job type and the pipeline syntax. It's part of the suggested plugins at setup. |
+| **Git** plugin | Provides the `git` step used to check out code. Also part of the suggested plugins. |
+| Go on the Jenkins machine | Needed for `go test`. Otherwise the step fails with `go: not found`. |
+| Docker on the Jenkins machine | Needed for `docker build`. |
+| `jenkins` user in the `docker` group | Jenkins runs builds as the `jenkins` user, which may not use Docker by default. |
+
+```bash
+sudo usermod -aG docker jenkins
+sudo systemctl restart jenkins   # group changes only apply after a restart
+```
+
+### Create a pipeline job
+
+1. *Dashboard → New Item*, enter a name (e.g. `go-test`), choose **Pipeline**, click **OK**.
+2. Scroll to **Pipeline**, keep **Definition: Pipeline script**, and paste the script.
+3. **Save**, then **Build Now**. The output is under the build number → **Console Output**.
+
+Instead of pasting the script, **Pipeline script from SCM** reads a `Jenkinsfile` from a Git repository. That's the usual way in real projects.
+
+> **Tip:** The **Pipeline Syntax** link below the script box generates snippets for any step, so you don't have to remember the exact syntax.
+
+### Structure of a declarative pipeline
+
+```groovy
+pipeline {                       // everything lives inside this block
+    agent { ... }                // where to run: which node / workspace
+    environment { ... }          // environment variables for all stages
+    stages {                     // required wrapper around all stages
+        stage('Name') {          // one named phase, shown in the UI
+            steps {              // the actual commands of that stage
+                ...
+            }
+        }
+    }
+}
+```
+
+| Block | Required | Purpose |
+|---|---|---|
+| `pipeline` | yes | Marks a declarative pipeline. |
+| `agent` | yes | Which machine (node) runs the build. `any` means any available one. |
+| `environment` | no | Variables available to every step, e.g. `GO111MODULE = 'on'`. |
+| `stages` | yes | Holds all `stage` blocks. A `stage` placed directly in `pipeline {}` is a syntax error. |
+| `stage('…')` | yes | A named phase. Each stage shows up as its own column in the build view. |
+| `steps` | yes | The commands of a stage, such as `git` and `sh`. |
+
+### The `git` and `sh` steps
+
+```groovy
+steps {
+    git 'https://github.com/kodekloudhub/go-webapp-sample.git'
+    sh 'go test ./...'
+}
+```
+
+- **`git '<url>'`** is a Jenkins step from the Git plugin, not the shell command. It clones the repository into the job's workspace, or fetches and checks out the latest commit if it's already there. That's why there's no `git clone`. Unlike a shell `git clone`, it also works with Jenkins credentials for private repositories.
+- **`sh '<command>'`** runs a shell command on the agent. `go test ./...` runs the tests in all packages below the current folder.
+
+| Written in the pipeline | What runs |
+|---|---|
+| `git 'URL'` | Jenkins Git step: clone/fetch + checkout, managed by Jenkins |
+| `sh 'git clone URL'` | Plain Git CLI command in a shell, nothing managed by Jenkins |
+
+### Exit codes decide SUCCESS or FAILURE
+
+Jenkins doesn't read error messages in the log. A `sh` step **fails only if its command returns a non-zero exit code**.
+
+The course's run stage used:
+
+```groovy
+sh 'cd /var/lib/jenkins/workspace/go-full-pipeline && go-webapp-sample &'
+```
+
+| Operator | Meaning |
+|---|---|
+| `&&` | Run the next command only if the previous one succeeded. |
+| `&` (at the end) | Start the whole command in the **background** and return immediately. |
+
+The log showed `go-webapp-sample: not found`, yet the build ended with **SUCCESS**:
+
+![Without &, sh waits and returns the real exit code; with &, sh returns 0 immediately and the failure goes unnoticed](images/sh-background-exit-code.svg)
+
+The fix:
+
+```groovy
+sh '''
+    cd /var/lib/jenkins/workspace/go-full-pipeline
+    ./go-webapp-sample
+'''
+```
+
+- Without the `&`, `sh` waits for the program and returns its real exit code, so a failure now fails the build.
+- `./` runs the file from the current folder. Without it, Linux only searches the folders in `$PATH`, which don't include the current folder. That's why it was "not found".
+- `'''…'''` lets a `sh` step span several lines.
+
+Jenkins also stops processes a build left running once the build ends, so `&` isn't a way to keep a web app running. Use Docker or `systemd` for that.
+
+### Pipeline: checkout and build a Docker image
+
+The final script from the course:
+
+```groovy
+pipeline {
+    agent {
+        label {
+            label 'master'
+            customWorkspace "${JENKINS_HOME}/${BUILD_NUMBER}/"
+        }
+    }
+    environment {
+        GO111MODULE = 'on'
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                git 'https://github.com/kodekloudhub/go-webapp-sample.git'
+            }
+        }
+        stage('Build Image') {
+            steps {
+                sh 'docker build -t adminturneddevops/go-webapp-sample .'
+            }
+        }
+    }
+}
+```
+
+| Part | Meaning |
+|---|---|
+| `label 'master'` | Run on the node with the label `master`, the Jenkins controller in the lab. Newer Jenkins versions call it `built-in`. |
+| `customWorkspace "${JENKINS_HOME}/${BUILD_NUMBER}/"` | Use a separate folder per build, e.g. `/var/lib/jenkins/6`, instead of the default `/var/lib/jenkins/workspace/<job>`. The log shows `Running in /var/lib/jenkins/6`. |
+| `GO111MODULE = 'on'` | Turns on Go modules for dependency handling. The name must be all caps: environment variables are case-sensitive, so the course's `Go111MODULE` is simply ignored (harmless here, because modern Go uses modules by default). |
+| `stage('Checkout')` | Clones the repo into the workspace. |
+| `stage('Build Image')` | Builds a Docker image from the `Dockerfile` in that repo. |
+
+> **`label { }` vs `node { }`:** The Jenkins docs show `customWorkspace` inside `agent { node { label '…'; customWorkspace '…' } }`. The `label { }` form above also worked in the lab, as the build log shows. Simpler still is to leave out `customWorkspace` and let Jenkins manage the workspace.
+
+### What `docker build` does
+
+```bash
+docker build -t adminturneddevops/go-webapp-sample .
+```
+
+| Part | Meaning |
+|---|---|
+| `docker build` | Build an image from a `Dockerfile`. |
+| `-t adminturneddevops/go-webapp-sample` | Name (tag) the image. Format `<docker-hub-user>/<name>`. Without `:version`, the tag is `latest`. |
+| `.` | The **build context**: the current folder (the workspace with the cloned repo). Docker reads the `Dockerfile` from there and can copy these files into the image. |
+
+The repo's `Dockerfile`, step by step (the log shows these as `Step 1/7` … `Step 7/7`):
+
+```dockerfile
+FROM golang:latest          # start from an image that has Go installed
+RUN mkdir /app              # create a folder inside the image
+ADD . /app                  # copy the build context (source code) into it
+WORKDIR /app                # run the following commands in /app
+RUN go build -o main .      # compile the app into a binary called main
+EXPOSE 8080                 # document that the app listens on port 8080
+CMD [ "/app/main" ]         # what runs when a container starts
+```
+
+`RUN go build` is where the Go code is actually compiled; that's why the log shows Go downloading dependencies. The build ends with:
+
+```
+Successfully built b8538379762a
+Successfully tagged adminturneddevops/go-webapp-sample:latest
+```
+
+### Image vs container
+
+![docker build turns the build context into an image; docker run starts a container from it; docker push uploads it to a registry](images/docker-image-vs-container.svg)
+
+The pipeline **only builds the image**. It doesn't start the app and doesn't upload anything.
+
+```bash
+docker images                                    # list local images
+docker run -d --name go-webapp -p 8080:8080 \
+  adminturneddevops/go-webapp-sample:latest      # start a container
+docker push adminturneddevops/go-webapp-sample:latest   # upload (needs docker login)
+```
+
+- `-d` runs the container in the background (detached).
+- `-p 8080:8080` maps port 8080 on the host to port 8080 in the container.
+- `docker push` only works for a Docker Hub account you can log in to, here `adminturneddevops`.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -448,6 +648,11 @@ Grafana reads from Prometheus and draws dashboards. It runs on port `3000`; the 
 | User can log in but sees nothing | No **Overall → Read** permission / no global role | Give them Overall → Read, or a global role that has it (step 10). |
 | Prometheus doesn't start after editing the config | YAML error, often wrong indentation or a missing `]` | Run `promtool check config /etc/prometheus/prometheus.yml` (step 12). |
 | Jenkins target is **DOWN** in Prometheus | Wrong port, missing `metrics_path`, or the plugin isn't installed | Open `http://<jenkins>/prometheus/` in a browser and match the config to it (step 12). |
+| Pipeline fails to start with a syntax error | A `stage` outside of `stages { }`, or a missing brace | Wrap all stages in `stages { }` (step 13). |
+| Build shows **SUCCESS** although the log has an error | The command was started in the background with `&`, so `sh` returned `0` | Remove the `&` (step 13). |
+| `go-webapp-sample: not found` | The program isn't in `$PATH` | Run it with `./go-webapp-sample` from its folder (step 13). |
+| `go: not found` | Go isn't installed on the Jenkins machine | Install Go on the agent (step 13). |
+| `permission denied … /var/run/docker.sock` | The `jenkins` user can't use Docker | `sudo usermod -aG docker jenkins`, then restart Jenkins (step 13). |
 
 ---
 
@@ -481,4 +686,12 @@ sudo systemctl restart prometheus
 
 # Jenkins metrics endpoint
 curl -s http://localhost:8085/prometheus/ | head
+
+# Let Jenkins use Docker
+sudo usermod -aG docker jenkins && sudo systemctl restart jenkins
+
+# Docker: list images, run, push
+docker images
+docker run -d -p 8080:8080 adminturneddevops/go-webapp-sample:latest
+docker push adminturneddevops/go-webapp-sample:latest
 ```
