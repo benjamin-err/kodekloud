@@ -19,8 +19,9 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 13. [Metrics with Prometheus and Grafana](#12-metrics-with-prometheus-and-grafana)
 14. [Pipelines](#13-pipelines)
 15. [Agents](#14-agents)
-16. [Troubleshooting](#troubleshooting)
-17. [Quick reference](#quick-reference)
+16. [Blue Ocean](#15-blue-ocean)
+17. [Troubleshooting](#troubleshooting)
+18. [Quick reference](#quick-reference)
 
 ---
 
@@ -38,7 +39,7 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 
 > **Note:** The course labs use Red Hat-style servers (`yum`, `rpm`). Ubuntu uses `apt` instead, so the lab commands were translated. Both versions are shown where they differ.
 >
-> Steps 1–8 were done on my local machine. Steps 9–14 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
+> Steps 1–8 were done on my local machine. Steps 9–15 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
 
 ---
 
@@ -821,6 +822,47 @@ Like `label`, `docker` also works per stage, for example with `agent none` at th
 
 ---
 
+## 15. Blue Ocean
+
+**Blue Ocean** is a plugin that adds a second, more modern UI to Jenkins, built around pipelines. The jobs are the same; it's just a different way to create and look at them.
+
+| Classic UI | Blue Ocean |
+|---|---|
+| Console log as one long text | Pipeline drawn as stages; click a stage to see only its steps and logs |
+| Create jobs via *New Item* and forms | Wizard: pick where the code lives, Jenkins sets up the job |
+| One job per branch, set up by hand | Every branch with a `Jenkinsfile` is built automatically |
+
+### Install and open
+
+1. *Manage Jenkins → Plugins → Available plugins →* **Blue Ocean** (it pulls in its dependencies), then restart Jenkins.
+2. Click **Open Blue Ocean** in the left sidebar, or go to `http://<jenkins>/blue`.
+3. **Classic Item Creation** / the exit icon at the top right takes you back to the normal UI.
+
+### Create a pipeline from a Git repository
+
+*Pipelines → New Pipeline*:
+
+![Blue Ocean Create Pipeline wizard: Git selected as code source, repository URL https://github.com/kodekloudhub/go-webapp-sample.git, username and password fields](images/blue-ocean-create-pipeline.png)
+
+1. **Where do you store your code?** Choose **Git** for any Git URL. The GitHub/Bitbucket options log in to that service with an access token and let you pick from your repositories.
+2. **Repository URL:** `https://github.com/kodekloudhub/go-webapp-sample.git`
+3. **Username / Password:** only needed for private repositories. **Create Credential** saves them in Jenkins' credentials store (like step 14).
+4. **Create Pipeline.**
+
+The pipeline is defined by the **`Jenkinsfile`** in the repository, not in Jenkins. Blue Ocean creates a **Multibranch Pipeline** job: it scans the repository, finds every branch that has a `Jenkinsfile`, and runs a build for each. A repository without a `Jenkinsfile` produces no builds.
+
+That's the main difference to step 13, where the script was pasted into the job:
+
+| | Script in the job (step 13) | `Jenkinsfile` in the repo (Blue Ocean) |
+|---|---|---|
+| Where the pipeline lives | Jenkins job configuration | Git, next to the code |
+| Versioned / reviewed | No | Yes, with every commit |
+| Branches | One job, one branch | Each branch builds automatically |
+
+> **Note:** Blue Ocean is in maintenance mode and gets no new features. For the stage view in the classic UI, Jenkins now recommends the **Pipeline Graph View** plugin. Blue Ocean still works and is what the course uses.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -843,6 +885,7 @@ Like `label`, `docker` also works per stage, for example with `agent none` at th
 | Agent stays offline, log says `java: command not found` | Java isn't installed on the agent | `sudo yum install java-17 -y` on the agent, then *Relaunch agent* (step 14). |
 | Agent log shows an SSH authentication failure | Wrong username/password in the credentials | Test `ssh bob@node01` by hand, then fix the credentials (step 14). |
 | `Invalid agent type "docker" specified` | Docker Pipeline plugin not installed | Install **Docker Pipeline** and run the build again (step 14). |
+| Blue Ocean pipeline created but nothing builds | No `Jenkinsfile` in the repository (or not in the root folder) | Add a `Jenkinsfile` to the branch and rescan the repository (step 15). |
 | Build waits forever: *Waiting for next available executor* | No online node has the requested label, or all executors are busy | Check the label in `agent { label … }` matches the node name and the node is online (step 14). |
 
 ---
