@@ -653,7 +653,7 @@ So far every build ran on the Jenkins server itself. In a real setup, the server
 
 The controller hands each job to a worker node that fits it, e.g. a Linux job to a Linux node and a macOS job to a macOS node. The agent on that node runs it:
 
-![Jenkins controller node with Job 1 and Job 2; Job 1 goes to Linux Worker Node 1, Job 2 to MacOS Worker Node 2, each running agents](images/jenkins-jobs-to-worker-nodes.webp)
+![Jenkins controller node with Job 1 and Job 2; Job 1 goes to Linux Worker Node 1, Job 2 to MacOS Worker Node 2, each running agents](images/jenkins-jobs-to-worker-nodes.gif)
 
 ### Architecture overview
 
