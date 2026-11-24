@@ -700,7 +700,44 @@ Jenkins stores the password encrypted and uses it to SSH into `node01`. In real 
 | Host Key Verification Strategy | Manually trusted key | Checks node01's SSH host key |
 | Availability | Keep this agent online as much as possible | Reconnects automatically |
 
-After **Save**, Jenkins connects to `node01` as `bob`, copies the agent, and starts it with Java. Check *Nodes → linux-node → Log*; the end should say the agent is connected and online.
+After **Save**, Jenkins connects to `node01` and starts the agent (see next part). Check *Nodes → linux-node → Log*; the end should say the agent is connected and online.
+
+### How Jenkins launches an SSH agent
+
+> **Key point:** An SSH agent doesn't start itself. The **controller logs in to the agent machine over SSH**, like you would by hand, and starts the agent program there. That's why the node needs a hostname, credentials and Java.
+
+![Sequence: the controller opens SSH to node01:22, checks the host key, logs in as bob, copies remoting.jar, runs it with Java, and keeps the connection open; builds are then sent over the same connection and run as bob](images/ssh-agent-launch.svg)
+
+1. **The controller opens the connection.** Traffic goes from the controller to port 22 on `node01`. `node01` never has to reach Jenkins and needs no Jenkins password.
+2. **Host key check.** Before sending a password, the controller checks `node01`'s SSH host key, the same as the "Are you sure you want to continue connecting?" prompt on a first `ssh`. This stops Jenkins from sending bob's password to the wrong machine. The *Host Key Verification Strategy* setting controls this.
+3. **Login with credentials.** The controller logs in as `bob` with the credentials from part 3. Jenkins stores them encrypted under `JENKINS_HOME`; jobs refer to them by ID and never see the password. Wrong credentials means no login, so no agent.
+4. **Copy the agent program.** Jenkins copies `remoting.jar` into the *Remote root directory* (`/home/bob`), so bob needs write access there.
+5. **Start the agent.** Jenkins runs `java -jar remoting.jar` over SSH. That's why **Java is the only requirement** on `node01`: there's no Jenkins installation there, just this one Java process the controller started.
+6. **The SSH connection stays open.** Controller and agent talk through it. It's opened once, not once per build.
+
+### What happens when a build runs
+
+When a pipeline asks for `agent { label "linux-node" }`, the controller sends the steps down that **already open** SSH connection. The agent process runs them:
+
+- **as `bob`, with bob's Linux permissions.** That's why `sh 'whoami'` prints `bob`. Whatever bob can't do (write to `/opt`, use Docker without being in the `docker` group, …), the build can't do either.
+- **in `/home/bob/workspace/<job-name>`**, under the remote root directory.
+- Log output and exit codes go back to the controller, which shows them in the console and decides SUCCESS or FAILURE (see step 13).
+
+If the connection drops (network problem, reboot, bob's password changed), the node shows **offline** and builds that need `linux-node` wait in the queue. With *Keep this agent online as much as possible*, Jenkins repeats steps 1–5 to reconnect.
+
+### Two kinds of SSH in these notes
+
+They go in opposite directions:
+
+| | Steps 4–7 (Jenkins SSH server) | Step 14 (SSH agent) |
+|---|---|---|
+| Who connects | **You** → Jenkins | **Jenkins** → `node01` |
+| Port | `8088` (Jenkins' built-in SSH server) | `22` (the machine's normal `sshd`) |
+| Logs in as | A Jenkins user (`benjamin`) | A Linux user (`bob`) |
+| Authenticates with | Your key, added to your Jenkins user | Credentials stored in Jenkins |
+| Purpose | Run Jenkins CLI commands | Start the agent and run builds |
+
+> **The other direction:** Jenkins also has *inbound* agents, where the agent machine starts `java -jar agent.jar` itself and connects **to** the controller with a secret. That's used when the controller can't reach the agent, for example behind a firewall. The course uses SSH launching.
 
 ### 5. Run a pipeline on the agent
 
