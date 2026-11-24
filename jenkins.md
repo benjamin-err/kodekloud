@@ -18,10 +18,11 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 12. [Views](#11-views)
 13. [Metrics with Prometheus and Grafana](#12-metrics-with-prometheus-and-grafana)
 14. [Pipelines](#13-pipelines)
-15. [Agents](#14-agents)
-16. [Blue Ocean](#15-blue-ocean)
-17. [Troubleshooting](#troubleshooting)
-18. [Quick reference](#quick-reference)
+15. [Jenkins architecture](#14-jenkins-architecture)
+16. [Agents](#15-agents)
+17. [Blue Ocean](#16-blue-ocean)
+18. [Troubleshooting](#troubleshooting)
+19. [Quick reference](#quick-reference)
 
 ---
 
@@ -39,7 +40,7 @@ Personal notes from the KodeKloud Jenkins course: installing and accessing Jenki
 
 > **Note:** The course labs use Red Hat-style servers (`yum`, `rpm`). Ubuntu uses `apt` instead, so the lab commands were translated. Both versions are shown where they differ.
 >
-> Steps 1–8 were done on my local machine. Steps 9–15 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
+> Steps 1–8 were done on my local machine. Steps 9–16 were done in the KodeKloud lab environment, where Jenkins listens on port `8085` instead of `8080`.
 
 ---
 
@@ -636,9 +637,9 @@ docker push adminturneddevops/go-webapp-sample:latest   # upload (needs docker l
 
 ---
 
-## 14. Agents
+## 14. Jenkins architecture
 
-So far every build ran on the Jenkins server itself. With **agents**, the server only coordinates, and other machines do the actual work.
+So far every build ran on the Jenkins server itself. In a real setup, the server only coordinates, and other machines do the actual work.
 
 | Term | Meaning |
 |---|---|
@@ -648,22 +649,28 @@ So far every build ran on the Jenkins server itself. With **agents**, the server
 | **Executor** | A build slot on a node. 1 executor = 1 build at a time. |
 | **Label** | A tag on a node, used by pipelines to choose where they run. |
 
+### Controller and worker nodes
+
 The controller hands each job to a worker node that fits it, e.g. a Linux job to a Linux node and a macOS job to a macOS node. The agent on that node runs it:
 
 ![Jenkins controller node with Job 1 and Job 2; Job 1 goes to Linux Worker Node 1, Job 2 to MacOS Worker Node 2, each running agents](images/jenkins-jobs-to-worker-nodes.webp)
 
-The bigger picture:
+### Architecture overview
 
 ![Jenkins architecture: the controller node holds plugins, jobs, nodes, credentials and configurations; it connects via SSH or JNLP to worker nodes: a Linux node with an agent and two executors, a Docker agent, a Kubernetes agent, and a Windows node with an agent and one executor](images/jenkins-architecture.png)
 
 - **Controller node:** holds everything that defines Jenkins: plugins, jobs, the list of nodes, credentials and configuration. It decides what runs where but ideally runs no builds itself.
 - **Worker nodes:** do the work. Each runs an **agent** process with one or more **executors** (build slots). The Linux node with two executors can run two builds at once.
 - **How they connect:**
-  - **SSH:** the controller logs in to the node and starts the agent. This is what the lab uses (see *How Jenkins launches an SSH agent* below).
+  - **SSH:** the controller logs in to the node and starts the agent. This is what the lab uses (see [How Jenkins launches an SSH agent](#how-jenkins-launches-an-ssh-agent)).
   - **JNLP** (inbound agent): the node starts the agent itself and connects to the controller. Common for Windows machines, which usually don't run an SSH server.
-  - **Docker / Kubernetes agents:** no permanent machine. Jenkins starts a container or pod for the build and removes it afterwards (see *Docker containers as agents* below).
+  - **Docker / Kubernetes agents:** no permanent machine. Jenkins starts a container or pod for the build and removes it afterwards (see [Docker containers as agents](#docker-containers-as-agents)).
 
-In the lab, the remote machine is a CentOS host called `node01` with a Linux user `bob`. In Jenkins it's registered as the node `linux-node`:
+---
+
+## 15. Agents
+
+This step sets up a real worker node. In the lab, the remote machine is a CentOS host called `node01` with a Linux user `bob`. In Jenkins it's registered as the node `linux-node`:
 
 ![Jenkins controller connects over SSH to node01 (CentOS, user bob), registered as node linux-node with 1 executor, which runs the Hello stage](images/jenkins-agent-architecture.png)
 
@@ -744,7 +751,7 @@ If the connection drops (network problem, reboot, bob's password changed), the n
 
 They go in opposite directions:
 
-| | Steps 4–7 (Jenkins SSH server) | Step 14 (SSH agent) |
+| | Steps 4–7 (Jenkins SSH server) | Step 15 (SSH agent) |
 |---|---|---|
 | Who connects | **You** → Jenkins | **Jenkins** → `node01` |
 | Port | `8088` (Jenkins' built-in SSH server) | `22` (the machine's normal `sshd`) |
@@ -874,7 +881,7 @@ Like `label`, `docker` also works per stage, for example with `agent none` at th
 
 ---
 
-## 15. Blue Ocean
+## 16. Blue Ocean
 
 **Blue Ocean** is a plugin that adds a second, more modern UI to Jenkins, built around pipelines. The jobs are the same; it's just a different way to create and look at them.
 
@@ -898,7 +905,7 @@ Like `label`, `docker` also works per stage, for example with `agent none` at th
 
 1. **Where do you store your code?** Choose **Git** for any Git URL. The GitHub/Bitbucket options log in to that service with an access token and let you pick from your repositories.
 2. **Repository URL:** `https://github.com/kodekloudhub/go-webapp-sample.git`
-3. **Username / Password:** only needed for private repositories. **Create Credential** saves them in Jenkins' credentials store (like step 14).
+3. **Username / Password:** only needed for private repositories. **Create Credential** saves them in Jenkins' credentials store (like step 15).
 4. **Create Pipeline.**
 
 The pipeline is defined by the **`Jenkinsfile`** in the repository, not in Jenkins. Blue Ocean creates a **Multibranch Pipeline** job: it scans the repository, finds every branch that has a `Jenkinsfile`, and runs a build for each. A repository without a `Jenkinsfile` produces no builds.
@@ -934,11 +941,11 @@ That's the main difference to step 13, where the script was pasted into the job:
 | `go-webapp-sample: not found` | The program isn't in `$PATH` | Run it with `./go-webapp-sample` from its folder (step 13). |
 | `go: not found` | Go isn't installed on the Jenkins machine | Install Go on the agent (step 13). |
 | `permission denied … /var/run/docker.sock` | The `jenkins` user can't use Docker | `sudo usermod -aG docker jenkins`, then restart Jenkins (step 13). |
-| Agent stays offline, log says `java: command not found` | Java isn't installed on the agent | `sudo yum install java-17 -y` on the agent, then *Relaunch agent* (step 14). |
-| Agent log shows an SSH authentication failure | Wrong username/password in the credentials | Test `ssh bob@node01` by hand, then fix the credentials (step 14). |
-| `Invalid agent type "docker" specified` | Docker Pipeline plugin not installed | Install **Docker Pipeline** and run the build again (step 14). |
-| Blue Ocean pipeline created but nothing builds | No `Jenkinsfile` in the repository (or not in the root folder) | Add a `Jenkinsfile` to the branch and rescan the repository (step 15). |
-| Build waits forever: *Waiting for next available executor* | No online node has the requested label, or all executors are busy | Check the label in `agent { label … }` matches the node name and the node is online (step 14). |
+| Agent stays offline, log says `java: command not found` | Java isn't installed on the agent | `sudo yum install java-17 -y` on the agent, then *Relaunch agent* (step 15). |
+| Agent log shows an SSH authentication failure | Wrong username/password in the credentials | Test `ssh bob@node01` by hand, then fix the credentials (step 15). |
+| `Invalid agent type "docker" specified` | Docker Pipeline plugin not installed | Install **Docker Pipeline** and run the build again (step 15). |
+| Blue Ocean pipeline created but nothing builds | No `Jenkinsfile` in the repository (or not in the root folder) | Add a `Jenkinsfile` to the branch and rescan the repository (step 16). |
+| Build waits forever: *Waiting for next available executor* | No online node has the requested label, or all executors are busy | Check the label in `agent { label … }` matches the node name and the node is online (step 15). |
 
 ---
 
