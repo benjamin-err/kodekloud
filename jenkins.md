@@ -648,6 +648,21 @@ So far every build ran on the Jenkins server itself. With **agents**, the server
 | **Executor** | A build slot on a node. 1 executor = 1 build at a time. |
 | **Label** | A tag on a node, used by pipelines to choose where they run. |
 
+The controller hands each job to a worker node that fits it, e.g. a Linux job to a Linux node and a macOS job to a macOS node. The agent on that node runs it:
+
+![Jenkins controller node with Job 1 and Job 2; Job 1 goes to Linux Worker Node 1, Job 2 to MacOS Worker Node 2, each running agents](images/jenkins-jobs-to-worker-nodes.webp)
+
+The bigger picture:
+
+![Jenkins architecture: the controller node holds plugins, jobs, nodes, credentials and configurations; it connects via SSH or JNLP to worker nodes: a Linux node with an agent and two executors, a Docker agent, a Kubernetes agent, and a Windows node with an agent and one executor](images/jenkins-architecture.png)
+
+- **Controller node:** holds everything that defines Jenkins: plugins, jobs, the list of nodes, credentials and configuration. It decides what runs where but ideally runs no builds itself.
+- **Worker nodes:** do the work. Each runs an **agent** process with one or more **executors** (build slots). The Linux node with two executors can run two builds at once.
+- **How they connect:**
+  - **SSH:** the controller logs in to the node and starts the agent. This is what the lab uses (see *How Jenkins launches an SSH agent* below).
+  - **JNLP** (inbound agent): the node starts the agent itself and connects to the controller. Common for Windows machines, which usually don't run an SSH server.
+  - **Docker / Kubernetes agents:** no permanent machine. Jenkins starts a container or pod for the build and removes it afterwards (see *Docker containers as agents* below).
+
 In the lab, the remote machine is a CentOS host called `node01` with a Linux user `bob`. In Jenkins it's registered as the node `linux-node`:
 
 ![Jenkins controller connects over SSH to node01 (CentOS, user bob), registered as node linux-node with 1 executor, which runs the Hello stage](images/jenkins-agent-architecture.png)
